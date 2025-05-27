@@ -10,7 +10,6 @@ env:
   PROJECT_ID: pocketbase-454721
   REGION: australia-southeast1
   SERVICE_NAME: expense-tracker
-  REGISTRY: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/expense-tracker
 
 jobs:
   build-and-deploy:
