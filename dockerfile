@@ -19,7 +19,7 @@ RUN bun install --ci
 COPY --link . .
 
 # Build the frontend to generate the dist folder
-RUN cd frontend && bun run build
+RUN cd frontend && bun install --ci && bun run build
 
 FROM --platform=linux/amd64 base
 
