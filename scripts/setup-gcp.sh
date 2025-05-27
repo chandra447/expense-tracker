@@ -10,7 +10,7 @@ REGION="australia-southeast1"
 SERVICE_NAME="expense-tracker"
 REPO_NAME="expense-tracker"
 SA_NAME="github-actions-sa"
-GITHUB_REPO="GITHUB_USERNAME/expense-tracker" # Replace with your GitHub username or organization
+GITHUB_REPO="chandra447/expense-tracker"
 
 # Colors for output
 RED='\033[0;31m'
@@ -72,47 +72,62 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 
 echo -e "${GREEN}Assigned roles to service account.${NC}"
 
-# Setup Workload Identity Federation for GitHub Actions
+# Get project number
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+
+# Setup Workload Identity Federation for GitHub Actions using a simpler approach
 echo -e "${YELLOW}Setting up Workload Identity Federation...${NC}"
 
-# Create Workload Identity Pool if it doesn't exist
-POOL_ID="github-actions-pool"
-if ! gcloud iam workload-identity-pools describe $POOL_ID --location=global 2>/dev/null; then
-  gcloud iam workload-identity-pools create $POOL_ID \
-    --location=global \
-    --display-name="GitHub Actions Pool"
-  echo -e "${GREEN}Created Workload Identity Pool.${NC}"
-else
-  echo -e "${GREEN}Workload Identity Pool already exists.${NC}"
-fi
+# Use the workload identity federation command group
+echo -e "${YELLOW}Creating Workload Identity Federation configuration...${NC}"
+gcloud iam workload-identity-pools create-cred-config \
+  projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider \
+  --service-account=$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com \
+  --output-file=wif-credentials.json \
+  --credential-source-type=json \
+  --credential-source-file=- <<EOF
+{
+  "url": "https://token.actions.githubusercontent.com",
+  "audience": "//iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider",
+  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt"
+}
+EOF
 
-# Get the Workload Identity Pool ID
-POOL_NAME=$(gcloud iam workload-identity-pools describe $POOL_ID --location=global --format="value(name)")
+# Create the Workload Identity Pool if it doesn't exist
+echo -e "${YELLOW}Creating Workload Identity Pool...${NC}"
+gcloud iam workload-identity-pools create "github-actions-pool" \
+  --project="$PROJECT_ID" \
+  --location="global" \
+  --display-name="GitHub Actions Pool" \
+  --description="Identity pool for GitHub Actions" \
+  --disable-programmatic-validation 2>/dev/null || echo "Pool already exists"
 
-# Create Workload Identity Provider if it doesn't exist
-PROVIDER_ID="github-actions-provider"
-if ! gcloud iam workload-identity-pools providers describe $PROVIDER_ID --workload-identity-pool=$POOL_ID --location=global 2>/dev/null; then
-  gcloud iam workload-identity-pools providers create-oidc $PROVIDER_ID \
-    --workload-identity-pool=$POOL_ID \
-    --location=global \
-    --display-name="GitHub Actions Provider" \
-    --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository" \
-    --issuer-uri="https://token.actions.githubusercontent.com"
-  echo -e "${GREEN}Created Workload Identity Provider.${NC}"
-else
-  echo -e "${GREEN}Workload Identity Provider already exists.${NC}"
-fi
+# Create the Workload Identity Provider in that pool
+echo -e "${YELLOW}Creating Workload Identity Provider...${NC}"
+gcloud iam workload-identity-pools providers create-oidc "github-actions-provider" \
+  --project="$PROJECT_ID" \
+  --location="global" \
+  --workload-identity-pool="github-actions-pool" \
+  --display-name="GitHub Actions Provider" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-condition="attribute.repository=='${GITHUB_REPO}'" \
+  --disable-programmatic-validation 2>/dev/null || echo "Provider already exists"
+
+# Allow the service account to be impersonated by the GitHub repository
+echo -e "${YELLOW}Setting up service account impersonation...${NC}"
+gcloud iam service-accounts add-iam-policy-binding \
+  $SA_NAME@$PROJECT_ID.iam.gserviceaccount.com \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions-pool/attribute.repository/${GITHUB_REPO}"
 
 # Get the Workload Identity Provider resource name
-PROVIDER_NAME=$(gcloud iam workload-identity-pools providers describe $PROVIDER_ID --workload-identity-pool=$POOL_ID --location=global --format="value(name)")
-
-# Allow authentications from the GitHub repository
-echo -e "${YELLOW}Setting up authentication for GitHub repository...${NC}"
-gcloud iam service-accounts add-iam-policy-binding $SA_NAME@$PROJECT_ID.iam.gserviceaccount.com \
-  --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/${POOL_NAME}/attribute.repository/${GITHUB_REPO}"
+PROVIDER_NAME="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider"
 
 echo -e "${GREEN}Setup complete!${NC}"
 echo -e "${YELLOW}Add the following secrets to your GitHub repository:${NC}"
 echo -e "${GREEN}WORKLOAD_IDENTITY_PROVIDER:${NC} ${PROVIDER_NAME}"
-echo -e "${GREEN}SERVICE_ACCOUNT:${NC} ${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" 
+echo -e "${GREEN}SERVICE_ACCOUNT:${NC} ${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+# Remove the temporary credentials file
+rm -f wif-credentials.json 
