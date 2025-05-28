@@ -5,14 +5,6 @@ ENV NODE_ENV="production"
 
 FROM --platform=linux/amd64 base as build
 
-RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y \
-    build-essential \
-    node-gyp \
-    pkg-config \
-    python3 \
-    python3-pip
-
 COPY --link bun.lock package.json ./
 RUN bun install --ci
 
@@ -24,6 +16,10 @@ RUN cd frontend && bun install --ci && bun run build
 FROM --platform=linux/amd64 base
 
 COPY --from=build /app /app
+
+# Clean up frontend folder - keep only the built dist folder to reduce image size
+RUN cd frontend && \
+    rm -rf src node_modules package.json bun.lock *.ts *.js *.json public components.json eslint.config.js README.md .gitignore
 
 EXPOSE 3000
 
